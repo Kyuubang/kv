@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+    - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Build binaries
+      run: make build-all
+
+    - name: Create checksums
+      run: |
+        cd bin
+        sha256sum kv-* > checksums.txt
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2.4.2
+      with:
+        files: |
+          bin/kv-linux-amd64
+          bin/kv-linux-arm64
+          bin/kv-windows-amd64.exe
+          bin/kv-windows-arm64.exe
+          bin/kv-darwin-amd64
+          bin/kv-darwin-arm64
+          bin/checksums.txt
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
