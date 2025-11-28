@@ -190,7 +190,7 @@ func computeDiff(oldLines, newLines []string) ([]diffLine, []diffLine) {
 			leftDiff = append(leftDiff, diffLine{
 				lineNum: i + 1,
 				content: oldLine,
-				isDiff:  isDifferent && newLine != "",
+				isDiff:  isDifferent, // Mark as diff if line is different or removed
 				isAdded: false,
 			})
 		} else {
