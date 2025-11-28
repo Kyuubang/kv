@@ -17,7 +17,9 @@ import (
 )
 
 var (
-	editor string
+	editor         string
+	skipValidation bool
+	fromFile       string
 )
 
 var EditCmd = &cobra.Command{
@@ -30,6 +32,8 @@ var EditCmd = &cobra.Command{
 
 func init() {
 	EditCmd.Flags().StringVarP(&editor, "editor", "e", "", "Editor to use (default: $EDITOR or vim)")
+	EditCmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip the diff confirmation step")
+	EditCmd.Flags().StringVarP(&fromFile, "file", "f", "", "Read secret value from file instead of opening editor")
 	root.RootCmd.AddCommand(EditCmd)
 }
 
@@ -59,36 +63,48 @@ func runEdit(cmd *cobra.Command, args []string) {
 	// Get the latest version (first in the list)
 	latestVersion := versions[0]
 
-	// Determine editor
-	editorCmd := getEditor()
+	var newValueStr string
 
-	// Create secure temporary file
-	tempFile, err := createSecureTempFile(latestVersion.Value)
-	if err != nil {
-		root.ExitWithError(fmt.Errorf("failed to create temporary file: %w", err))
-	}
-	defer func() {
-		// Securely delete the temporary file
-		if err := secureDelete(tempFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to securely delete temp file: %v\n", err)
+	// Check if reading from file
+	if fromFile != "" {
+		fmt.Printf("Reading secret value from file: %s\n", fromFile)
+		content, err := os.ReadFile(fromFile)
+		if err != nil {
+			root.ExitWithError(fmt.Errorf("failed to read file: %w", err))
 		}
-	}()
+		newValueStr = string(content)
+	} else {
+		// Determine editor
+		editorCmd := getEditor()
 
-	fmt.Printf("Editing secret '%s' (version: %s)\n", secretName, latestVersion.Version[:8])
-	fmt.Printf("Opening editor: %s\n\n", editorCmd)
+		// Create secure temporary file
+		tempFile, err := createSecureTempFile(latestVersion.Value)
+		if err != nil {
+			root.ExitWithError(fmt.Errorf("failed to create temporary file: %w", err))
+		}
+		defer func() {
+			// Securely delete the temporary file
+			if err := secureDelete(tempFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to securely delete temp file: %v\n", err)
+			}
+		}()
 
-	// Open editor
-	if err := openEditor(editorCmd, tempFile); err != nil {
-		root.ExitWithError(fmt.Errorf("failed to open editor: %w", err))
+		fmt.Printf("Editing secret '%s' (version: %s)\n", secretName, latestVersion.Version[:8])
+		fmt.Printf("Opening editor: %s\n\n", editorCmd)
+
+		// Open editor
+		if err := openEditor(editorCmd, tempFile); err != nil {
+			root.ExitWithError(fmt.Errorf("failed to open editor: %w", err))
+		}
+
+		// Read the edited content
+		newValue, err := os.ReadFile(tempFile)
+		if err != nil {
+			root.ExitWithError(fmt.Errorf("failed to read edited file: %w", err))
+		}
+
+		newValueStr = string(newValue)
 	}
-
-	// Read the edited content
-	newValue, err := os.ReadFile(tempFile)
-	if err != nil {
-		root.ExitWithError(fmt.Errorf("failed to read edited file: %w", err))
-	}
-
-	newValueStr := string(newValue)
 
 	// Check if content was changed
 	if newValueStr == latestVersion.Value {
@@ -96,20 +112,24 @@ func runEdit(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	// Show diff in TUI for confirmation
-	fmt.Println("\nReview changes...")
-	diffModel := difftui.NewModel(latestVersion.Value, newValueStr, secretName)
-	p := tea.NewProgram(diffModel, tea.WithAltScreen())
+	// Show diff in TUI for confirmation unless skipped
+	if !skipValidation {
+		fmt.Println("\nReview changes...")
+		diffModel := difftui.NewModel(latestVersion.Value, newValueStr, secretName)
+		p := tea.NewProgram(diffModel, tea.WithAltScreen())
 
-	finalModel, err := p.Run()
-	if err != nil {
-		root.ExitWithError(fmt.Errorf("diff viewer error: %w", err))
-	}
+		finalModel, err := p.Run()
+		if err != nil {
+			root.ExitWithError(fmt.Errorf("diff viewer error: %w", err))
+		}
 
-	diffResult := finalModel.(difftui.Model)
-	if !diffResult.Confirmed() {
-		fmt.Println("Changes discarded.")
-		return
+		diffResult := finalModel.(difftui.Model)
+		if !diffResult.Confirmed() {
+			fmt.Println("Changes discarded.")
+			return
+		}
+	} else {
+		fmt.Println("\nSkipping validation...")
 	}
 
 	// Update the secret in Key Vault
