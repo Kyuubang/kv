@@ -67,8 +67,10 @@ func runEdit(cmd *cobra.Command, args []string) {
 
 	// Check if reading from file
 	if fromFile != "" {
-		fmt.Printf("Reading secret value from file: %s\n", fromFile)
-		content, err := os.ReadFile(fromFile)
+		// Validate that file path is absolute or clean it
+		cleanPath := filepath.Clean(fromFile)
+		fmt.Printf("Reading secret value from file: %s\n", cleanPath)
+		content, err := os.ReadFile(cleanPath) // #nosec G304 - User-specified file path for reading secret
 		if err != nil {
 			root.ExitWithError(fmt.Errorf("failed to read file: %w", err))
 		}
@@ -98,7 +100,7 @@ func runEdit(cmd *cobra.Command, args []string) {
 		}
 
 		// Read the edited content
-		newValue, err := os.ReadFile(tempFile)
+		newValue, err := os.ReadFile(tempFile) // #nosec G304 - Reading from controlled temp file we created
 		if err != nil {
 			root.ExitWithError(fmt.Errorf("failed to read edited file: %w", err))
 		}
@@ -164,14 +166,20 @@ func createSecureTempFile(content string) (string, error) {
 	tempDir := os.TempDir()
 	tempPath := filepath.Join(tempDir, filename)
 
-	file, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600) // #nosec G304 - Creating temp file in system temp dir with random name
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close temp file: %v\n", err)
+		}
+	}()
 
 	if _, err := file.WriteString(content); err != nil {
-		os.Remove(tempPath)
+		if removeErr := os.Remove(tempPath); removeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp file: %v\n", removeErr)
+		}
 		return "", err
 	}
 
@@ -195,7 +203,7 @@ func secureDelete(filePath string) error {
 	}
 
 	// Overwrite file with random data
-	file, err := os.OpenFile(filePath, os.O_WRONLY, 0600)
+	file, err := os.OpenFile(filePath, os.O_WRONLY, 0600) // #nosec G304 - Securely deleting temp file we created
 	if err != nil {
 		return err
 	}
@@ -203,21 +211,29 @@ func secureDelete(filePath string) error {
 	size := info.Size()
 	randomData := make([]byte, size)
 	if _, err := rand.Read(randomData); err != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file during cleanup: %v\n", closeErr)
+		}
 		return err
 	}
 
 	if _, err := file.Write(randomData); err != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file during cleanup: %v\n", closeErr)
+		}
 		return err
 	}
 
 	if err := file.Sync(); err != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file during cleanup: %v\n", closeErr)
+		}
 		return err
 	}
 
-	file.Close()
+	if err := file.Close(); err != nil {
+		return err
+	}
 
 	// Delete the file
 	return os.Remove(filePath)
